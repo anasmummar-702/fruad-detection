@@ -1,13 +1,20 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import random
+from sklearn.metrics import ConfusionMatrixDisplay
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
 from imblearn.over_sampling import SMOTE
 
-# 1. LOAD THE DATA
+# --- 1. LOAD DATA ---
+print("Loading data...")
 df = pd.read_csv('BankChurners.csv')
 
-# 2. DATA CLEANING (Drop the noise columns)
+# --- 2. CLEANING ---
 cols_to_drop = [
     'CLIENTNUM', 
     'Naive_Bayes_Classifier_Attrition_Flag_Card_Category_Contacts_Count_12_mon_Dependent_count_Education_Level_Months_Inactive_12_mon_1', 
@@ -15,53 +22,96 @@ cols_to_drop = [
 ]
 df = df.drop(columns=cols_to_drop, errors='ignore')
 
-# --- THE FIX STARTS HERE ---
-
-# 3. INSPECT THE RAW DATA (See what is actually in the column)
-print("--- Raw Values in Excel ---")
-print(df['Attrition_Flag'].unique())
-
-# 4. CLEAN AND MAP THE TARGET
-# .str.strip() removes hidden spaces from the start and end
+# --- 3. FIX TARGET VARIABLE ---
 df['Attrition_Flag'] = df['Attrition_Flag'].astype(str).str.strip()
-
-# Create the map explicitly
 target_map = {'Existing Customer': 0, 'Attrited Customer': 1}
-
-# Map the values
 df['Attrition_Flag'] = df['Attrition_Flag'].map(target_map)
-
-# 5. VERIFY THE MAPPING
-print("\n--- Values After Mapping (Should be 0 and 1) ---")
-print(df['Attrition_Flag'].value_counts())
-
-# SAFETY CHECK: If we still have NaNs (values that didn't match), drop them
 df = df.dropna(subset=['Attrition_Flag'])
-
-# Ensure it is an integer
 df['Attrition_Flag'] = df['Attrition_Flag'].astype(int)
 
-# --- RESUME NORMAL PROCESSING ---
-
-# 6. ENCODE OTHER CATEGORICAL FEATURES
+# --- 4. ENCODE FEATURES ---
 categorical_cols = df.select_dtypes(include=['object']).columns
 le = LabelEncoder()
 for col in categorical_cols:
     df[col] = le.fit_transform(df[col])
 
-# 7. SPLIT AND APPLY SMOTE
+# --- 5. SPLIT & BALANCE (SMOTE) ---
 X = df.drop('Attrition_Flag', axis=1)
 y = df['Attrition_Flag']
 
-# Check one last time before SMOTE
-if len(y.unique()) < 2:
-    print("\nCRITICAL ERROR: We still only have 1 class. Check the print outputs above!")
-else:
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    smote = SMOTE(random_state=42)
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    print("\nSUCCESS! SMOTE worked.")
-    print(f"Original Training Size: {X_train.shape}")
-    print(f"New Balanced Training Size: {X_train_resampled.shape}")
+smote = SMOTE(random_state=42)
+X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+print("Data balanced successfully.")
+
+# --- 6. TRAIN THE MODEL (Random Forest) ---
+print("Training the Random Forest model... (This may take 10-20 seconds)")
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(X_train_resampled, y_train_resampled)
+
+# --- 7. EVALUATE ---
+print("\nPredicting on Test Data...")
+y_pred = rf_model.predict(X_test)
+
+print("\n--- CONFUSION MATRIX ---")
+# [True Neg  False Pos]
+# [False Neg True Pos]
+print(confusion_matrix(y_test, y_pred))
+
+print("\n--- CLASSIFICATION REPORT ---")
+print(classification_report(y_test, y_pred))
+
+# --- 8. SHOW WHAT MATTERS MOST ---
+# This shows which features indicate fraud/churn the most
+importances = rf_model.feature_importances_
+feature_names = X.columns
+indices = np.argsort(importances)[::-1]
+
+print("\nTop 5 Most Important Features:")
+for i in range(5):
+    print(f"{i+1}. {feature_names[indices[i]]}")
+
+
+# 1. Pick a random row from the Test Data (Data the model hasn't seen for training)
+random_index = random.choice(X_test.index)
+customer_data = X_test.loc[[random_index]]
+actual_status = y_test.loc[random_index]
+
+# 2. Ask the model to predict
+prediction = rf_model.predict(customer_data)
+probability = rf_model.predict_proba(customer_data)
+
+# 3. Show the results
+print("\n--- SINGLE CUSTOMER TEST ---")
+print(f"Customer Details (Encoded):\n{customer_data.values}")
+print(f"\nACTUAL Status:    {'Attrited (Fraud/Left)' if actual_status == 1 else 'Existing (Safe)'}")
+print(f"MODEL Prediction: {'Attrited (Fraud/Left)' if prediction[0] == 1 else 'Existing (Safe)'}")
+print(f"Confidence Score: {probability[0][prediction[0]] * 100:.2f}%")
+
+if actual_status == prediction[0]:
+    print("✅ RESULT: CORRECT")
+else:
+    print("❌ RESULT: WRONG")
+
+# Create the plot
+plt.figure(figsize=(8, 6))
+ConfusionMatrixDisplay.from_estimator(rf_model, X_test, y_test, cmap='Blues', display_labels=["Existing", "Attrited"])
+plt.title("Confusion Matrix (Darker Blue = More Customers)")
+plt.show()
+
+# Get importance scores
+importances = rf_model.feature_importances_
+feature_names = X.columns
+
+# Create a DataFrame for better plotting
+feature_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
+feature_df = feature_df.sort_values(by='Importance', ascending=False).head(10)
+
+# Plot
+plt.figure(figsize=(10, 6))
+sns.barplot(x='Importance', y='Feature', data=feature_df, palette='viridis')
+plt.title("Top 10 Drivers of Churn/Fraud")
+plt.xlabel("Importance Score")
+plt.ylabel("Feature Name")
+plt.show()
