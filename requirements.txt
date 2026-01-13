@@ -1,3 +1,8 @@
-import pandas as pd
-df = pd.read_excel('BankChurners', engine='pyxlsb')
-print(df.head())
+streamlit
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+scikit-learn
+imbalanced-learn
